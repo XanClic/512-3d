@@ -56,11 +56,6 @@ dd -1.0, -0.8, 0.0, 1.0
 vertex3:
 dd  1.0, -0.8, 0.0, 1.0
 
-output_vertex1 = 0x8000
-output_vertex2 = 0x8010
-output_vertex3 = 0x8020
-st_div         = 0x8030
-
 
 ; Translation by ( 0 | 0 | -5 )
 ; FOV: 30°; Aspect: 320/200; zNear: 1; zFar: 100
@@ -70,10 +65,10 @@ dd 0.0    , 3.73205,  0.0    ,  0.0
 dd 0.0    , 0.0    , -1.0202 , -1.0
 dd 0.0    , 0.0    ,  3.08081,  5.0
 
-; First and second single are half of width and height, respectively. Third and
-; Fourth are free to use (Fourth is required to be 1.0).
+; First and second single are half of width and height, respectively. Third is
+; free to use (assumed to be 7.0), fourth... Well, idc.
 disp_transformation:
-dd 160.0, 100.0, 1.0, 1.0
+dd 160.0, 100.0, 7.0
 
 
 ; Rotation matrix (3x3, 1° around ( 0.3 | 1 | 0.1 ))
@@ -87,13 +82,22 @@ _start:
 
 xor     ax,ax
 mov     ds,ax
-mov     es,ax
-mov     ss,ax
-mov     sp,ax
 
 
-push    word 0xA000
-pop     fs
+; Creates a nearly BRG 2:3:3 (MSb to LSb) 8 bit palette (not exactly, but close enough).
+palette_loop:
+mov     dx,0x3C8
+out     dx,al
+inc     dx
+push    ax
+mov     cl,3
+palette_inner_loop:
+out     dx,al
+rol     al,3
+loop    palette_inner_loop
+pop     ax
+inc     al
+jnz     palette_loop
 
 
 
@@ -102,7 +106,7 @@ main_loop:
 mov     bx,modelview_projection_matrix
 mov     bp,mult
 
-mov     di,0x9000
+mov     di,0x8000
 push    di
 
 ; Multiplies the first, second and third row of the modelview projection
@@ -116,7 +120,7 @@ xor     si,si
 mult_inner_loop:
 movaps  xmm1,[bx + si]
 ; One byte shorter than movss, but achieves the same thing in the end (loading dword [bp] to xmm2)
-movups  xmm2,[bp]
+movups  xmm2,[ds:bp]
 add     bp,4
 pshufd  xmm2,xmm2,0x00
 mulps   xmm2,xmm1
@@ -133,6 +137,9 @@ add     di,16
 ; Same here
 jnp     mult_loop
 
+
+push    cs
+pop     es
 pop     si
 mov     di,bx
 mov     cx,24
@@ -140,22 +147,35 @@ rep     movsw
 
 
 
-movaps  xmm0,[bx - 48]
-movaps  xmm1,[bx - 32]
-movaps  xmm2,[bx - 16]
+mov     si,-48
+mat_norm_loop:
+movaps  xmm0,[bx + si]
+
+mov     di,48           ; i = 3
+xorps   xmm3,xmm3
+matrix_dot_vector_loop:
+pshufd  xmm4,xmm0,0xFF  ; vector[i]
+pslldq  xmm0,4          ; shift that out
+mulps   xmm4,[bx + di]  ; matrix[i]
+addps   xmm3,xmm4
+sub     di,16           ; i--
+jnc     matrix_dot_vector_loop
 
 
-call    matrix_dot_vector
-call    matrix_dot_vector
-call    matrix_dot_vector
+pshufd  xmm0,xmm3,0xFF  ; W
+divps   xmm3,xmm0
 
-call    norm_vector
-call    norm_vector
-call    norm_vector
+movaps  xmm0,xmm1
+movaps  xmm1,xmm2
+movaps  xmm2,xmm3
+add     si,16
+jnz     mat_norm_loop
 
 
 xor     di,di
 xor     eax,eax
+; Sets the high word of EDX to zero
+cdq
 mov     dx,200
 
 
@@ -180,8 +200,7 @@ mulps   xmm1,xmm6
 hsubps  xmm1,xmm1
 
 ; xmm1: vec1.x * vec2.y - vec1.y * vec2.x = st_div | ...
-pshufd  xmm1,xmm1,0x00
-movaps  [st_div],xmm1
+pshufd  xmm4,xmm1,0x00
 
 ; xmm6:  vec1
 ; xmm7: ~vec2
@@ -191,6 +210,8 @@ rasterize:
 cvtsi2ss xmm0,eax
 cvtsi2ss xmm1,edx
 punpckldq xmm0,xmm1
+
+push    ax
 
 movaps  xmm1,[disp_transformation]
 subps   xmm0,xmm1
@@ -207,6 +228,7 @@ mulps   xmm1,xmm6
 
 ; xmm0: xy * ~vec2
 ; xmm1: yx *  vec1
+; xmm4: st_div
 ; xmm5: bv
 ; xmm6: vec1
 ; xmm7: vec2
@@ -215,7 +237,7 @@ hsubps  xmm0,xmm1
 
 ;xmm0: x * vec2.y - y * vec2.x | ... | y * vec1.x - x * vec1.y | ...
 
-divps   xmm0,[st_div]
+divps   xmm0,xmm4
 
 pshufd  xmm1,xmm0,0xAA
 
@@ -224,30 +246,53 @@ pshufd  xmm1,xmm0,0xAA
 
 ; movss/addss would take two bytes more, the result is the same – s + t in
 ; the lowest single.
-movaps  xmm2,xmm0
-addps   xmm2,xmm1
-; xmm2: s + t
+movaps  xmm3,xmm0
+addps   xmm3,xmm1
+; xmm3: s + t
 
-xor     cl,cl
+xor     al,al
 
 ; That would be zero.
-xorps   xmm3,xmm3
-comiss  xmm0,xmm3
+xorps   xmm2,xmm2
+comiss  xmm0,xmm2
 jb      cull
-comiss  xmm1,xmm3
+comiss  xmm1,xmm2
 jb      cull
-; bx == modelview_projection_matrix, [bx + 76] is the fourth single in
-; disp_transformation, which is 1.0 (only the first two values of
-; disp_transformation are really used, thus it is ok to rely on that
-; one being 1.0)
-comiss  xmm2,[bx + 76]
+; W coordinate of third vertex (should be 1...)
+movups  xmm2,[bx - 4]
+comiss  xmm3,xmm2
 ja      cull
 
-mov     cl,15
+
+; 1 - (s + t) is weight of first vertex
+; s is that of second, t that of third
+subps   xmm2,xmm3
+; multiply each weight by 7
+movups  xmm3,[bx + 72]
+mulps   xmm2,xmm3
+cvtss2si eax,xmm2
+; first vertex is blue, must be shifted right by 1, because the blue share of
+; the 8 bit color is only two bits in size (instead of three)
+shr     al,1
+xor     si,si
+; second vertex is red, third is blue
+cvt_loop:
+mulps   xmm0,xmm3
+cvtss2si ecx,xmm0
+movaps  xmm0,xmm1
+shl     al,3
+or      al,cl
+dec     si
+jp      cvt_loop
 
 cull:
 
-mov     [fs:di],cl
+; output color
+push    word 0xA000
+pop     es
+stosb
+
+pop     ax
 
 inc     ax
 cmp     ax,320
@@ -257,41 +302,10 @@ dec     dx
 jz      main_loop
 go_on:
 
-inc     di
-
 jmp     rasterize
 
 
 
-shuf_vectors:
-movaps  xmm0,xmm1
-movaps  xmm1,xmm2
-movaps  xmm2,xmm3
-ret
-
-
-matrix_dot_vector:
-mov     di,48           ; i = 3
-xorps   xmm3,xmm3
-matrix_dot_vector_loop:
-pshufd  xmm4,xmm0,0xFF  ; vector[i]
-pslldq  xmm0,4          ; shift that out
-mulps   xmm4,[bx + di]  ; matrix[i]
-addps   xmm3,xmm4
-sub     di,16           ; i--
-jnc     matrix_dot_vector_loop
-
-jmp     shuf_vectors
-
-
-norm_vector:
-pshufd  xmm3,xmm0,0xFF  ; W
-divps   xmm0,xmm3
-movaps  xmm3,xmm0
-
-jmp     shuf_vectors
-
-
-times 510-($-$$) db 0
+;times 510-($-$$) db 0
 
 dw 0xAA55
