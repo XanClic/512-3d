@@ -70,12 +70,10 @@ dd 0.0    , 3.73205,  0.0    ,  0.0
 dd 0.0    , 0.0    , -1.0202 , -1.0
 dd 0.0    , 0.0    ,  3.08081,  5.0
 
-single_zero = $ - 16
-
+; First and second single are half of width and height, respectively. Third and
+; Fourth are free to use (Fourth is required to be 1.0).
 disp_transformation:
 dd 160.0, 100.0, 1.0, 1.0
-
-single_one = $ - 4
 
 
 ; Rotation matrix (3x3, 1° around ( 0.3 | 1 | 0.1 ))
@@ -117,7 +115,8 @@ xor     si,si
 
 mult_inner_loop:
 movaps  xmm1,[bx + si]
-movss   xmm2,[bp]
+; One byte shorter than movss, but achieves the same thing in the end (loading dword [bp] to xmm2)
+movups  xmm2,[bp]
 add     bp,4
 pshufd  xmm2,xmm2,0x00
 mulps   xmm2,xmm1
@@ -157,7 +156,6 @@ call    norm_vector
 
 xor     di,di
 xor     eax,eax
-cdq
 mov     dx,200
 
 
@@ -224,23 +222,32 @@ pshufd  xmm1,xmm0,0xAA
 ; xmm0: (x * vec2.y - y * vec2.x) / st_div = s
 ; xmm1: (y * vec1.x - x * vec1.y) / st_div = t
 
-movss   xmm2,xmm0
-addss   xmm2,xmm1
+; movss/addss would take two bytes more, the result is the same – s + t in
+; the lowest single.
+movaps  xmm2,xmm0
+addps   xmm2,xmm1
 ; xmm2: s + t
 
-mov     byte [fs:di],0
+xor     cl,cl
 
-movss   xmm3,[single_zero]
+; That would be zero.
+xorps   xmm3,xmm3
 comiss  xmm0,xmm3
 jb      cull
 comiss  xmm1,xmm3
 jb      cull
-comiss  xmm2,[single_one]
+; bx == modelview_projection_matrix, [bx + 76] is the fourth single in
+; disp_transformation, which is 1.0 (only the first two values of
+; disp_transformation are really used, thus it is ok to rely on that
+; one being 1.0)
+comiss  xmm2,[bx + 76]
 ja      cull
 
-mov     byte [fs:di],15
+mov     cl,15
 
 cull:
+
+mov     [fs:di],cl
 
 inc     ax
 cmp     ax,320
