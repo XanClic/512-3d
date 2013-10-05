@@ -135,6 +135,7 @@ jnp     mult_loop
 push    cs
 pop     es
 pop     si
+push    si
 mov     di,bx
 mov     cx,24
 rep     movsw
@@ -167,6 +168,8 @@ add     si,4
 ; First round: 0xfff4 (odd); second: 0xfff8 (odd); third (final): 0xfffc (even)
 jnp     mat_norm_loop
 
+pop     si
+fxsave  [si]
 
 xor     di,di
 xor     eax,eax
@@ -226,8 +229,8 @@ mulps   xmm1,xmm6
 ; xmm1: yx *  vec1
 ; xmm4: st_div
 ; xmm5: bv
-; xmm6: vec1
-; xmm7: vec2
+; xmm6:  vec1
+; xmm7: ~vec2
 
 hsubps  xmm0,xmm1
 
@@ -263,22 +266,31 @@ ja      cull
 ; 1 - (s + t) is weight of first vertex
 ; s is that of second, t that of third
 subps   xmm2,xmm3
+
+mulps   xmm0,[si+0xb8]
+mulps   xmm1,[si+0xc8]
+mulps   xmm2,[si+0xa8]
+
+movaps  xmm3,xmm0
+addps   xmm3,xmm1
+addps   xmm3,xmm2
+
 ; multiply each weight by 7
-movups  xmm3,[bx + 72]
-mulps   xmm2,xmm3
+divps   xmm3,[bx + 72]
+divps   xmm2,xmm3
 cvtss2si eax,xmm2
 ; first vertex is blue, must be shifted right by 1, because the blue share of
 ; the 8 bit color is only two bits in size (instead of three)
 shr     al,1
-xor     si,si
+xor     bp,bp
 ; second vertex is red, third is blue
 cvt_loop:
-mulps   xmm0,xmm3
+divps   xmm0,xmm3
 cvtss2si ecx,xmm0
 movaps  xmm0,xmm1
 shl     al,3
 or      al,cl
-dec     si
+dec     bp
 jp      cvt_loop
 
 cull:
@@ -302,6 +314,6 @@ jmp     rasterize
 
 
 
-times 510-($-$$) db 0
+;times 510-($-$$) db 0
 
 dw 0xAA55
