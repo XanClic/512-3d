@@ -53,6 +53,20 @@ dd  0.0, 1.0, -1.0, -1.0
 
 ; Translation by ( 0 | 0 | -5 )
 ; FOV: 30°; Aspect: 320/200; zNear: 1; zFar: 100
+; Source matrix of the "compressed" data is:
+; ( 2.33253     0       0       0   )
+; (    0    3.73205     0       0   )
+; (    0        0   -1.0202     0   )
+; (    0        0      5.0  3.08081 )
+; Normally, the last field in the third row would be -1.0 rather than 0. This
+; introduces a constant offset for the depth coordinate, so it will be in the
+; range of [-1.0, 1.0]. This, however, is not desirable in this case, since it
+; has to be mapped back to [0. 1.0], if perspective correction should be used.
+; In fact, any range [0, x] with any non-zero x is fine (even negative x);
+; therefore, we just omit the -1.0 there in favor of a 0, eliminating the
+; offset and getting a depth coordinate in [0, x] with some unknown x (but we
+; don't have to care about it anyway, since the weights are normalized after
+; factoring in the depth).
 modelview_projection_matrix = 0x7bc0
 mpm_data:
 dd 2.33253, 3.73205, -1.0202, 5.0, 3.08081
