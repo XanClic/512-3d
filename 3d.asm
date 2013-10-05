@@ -47,14 +47,8 @@ jmp     far 0x0000:_start
 
 
 ;Vertices
-vertex1:
-dd  0.0,  1.0, 0.0, 1.0
-
-vertex2:
-dd -1.0, -0.8, 0.0, 1.0
-
-vertex3:
-dd  1.0, -0.8, 0.0, 1.0
+vertices:
+dd  0.0, 1.0, -1.0, -1.0
 
 
 ; Translation by ( 0 | 0 | -5 )
@@ -147,9 +141,10 @@ rep     movsw
 
 
 
-mov     si,-48
+mov     si,-16
 mat_norm_loop:
-movaps  xmm0,[bx + si]
+movups  xmm0,[bx + si]
+shufps  xmm0,[bx - 16],0x44
 
 mov     di,48           ; i = 3
 xorps   xmm3,xmm3
@@ -168,8 +163,9 @@ divps   xmm3,xmm0
 movaps  xmm0,xmm1
 movaps  xmm1,xmm2
 movaps  xmm2,xmm3
-add     si,16
-jnz     mat_norm_loop
+add     si,4
+; First round: 0xfff4 (odd); second: 0xfff8 (odd); third (final): 0xfffc (even)
+jnp     mat_norm_loop
 
 
 xor     di,di
@@ -258,8 +254,8 @@ comiss  xmm0,xmm2
 jb      cull
 comiss  xmm1,xmm2
 jb      cull
-; W coordinate of third vertex (should be 1...)
-movups  xmm2,[bx - 4]
+; W coordinate of all vertices (should be 1...)
+movups  xmm2,[bx - 12]
 comiss  xmm3,xmm2
 ja      cull
 
