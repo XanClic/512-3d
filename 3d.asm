@@ -92,6 +92,8 @@ _start:
 xor     cx,cx
 mov     ds,cx
 mov     es,cx
+mov     ss,cx
+mov     sp,cx
 
 
 ; "decompress" the modelview-projection matrix
