@@ -42,7 +42,11 @@ int     0x10
 
 cld
 
-jmp     far 0x0000:_start
+; jmp far 0x0000:_start
+db 0xea
+dw _start
+mult_antistrife:
+dw 0x0000
 ; Genau hier sind 32 Bytes vorüber, der perfekte Platz für SSE-Daten.
 
 
@@ -71,6 +75,8 @@ dd  0.99986   ,  0.00170556, -0.0166361
 dd -0.00162249,  0.999986  ,  0.00500591
 dd  0.0166444 , -0.00497822,  0.999849
 
+mult_strife     dw 4
+
 
 _start:
 
@@ -97,6 +103,18 @@ jnz     palette_loop
 
 main_loop:
 
+mov     ah,1
+int     0x16
+jz      no_key
+
+xor     ax,ax
+int     0x16
+
+xor     byte [mult_strife],8
+xor     byte [mult_antistrife],32
+
+no_key:
+
 mov     bx,modelview_projection_matrix
 mov     bp,mult
 
@@ -115,7 +133,7 @@ mult_inner_loop:
 movaps  xmm1,[bx + si]
 ; One byte shorter than movss, but achieves the same thing in the end (loading dword [bp] to xmm2)
 movups  xmm2,[ds:bp]
-add     bp,4
+add     bp,[mult_strife]
 pshufd  xmm2,xmm2,0x00
 mulps   xmm2,xmm1
 addps   xmm0,xmm2
@@ -125,6 +143,8 @@ add     si,16
 ; Second time: 00100000 -> parity cleared
 ; Third  time: 00110000 -> parity set
 jnp     mult_inner_loop
+
+sub     bp,[mult_antistrife]
 
 movaps  [di],xmm0
 add     di,16
