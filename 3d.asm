@@ -43,7 +43,7 @@ int     0x10
 cld
 
 jmp     far 0x0000:_start
-; Genau hier sind 32 Bytes vorüber, der perfekte Platz für SSE-Daten.
+; 32 bytes have passed, so this is the perfect place for SSE data
 
 
 ;Vertices
@@ -53,16 +53,13 @@ dd  0.0, 1.0, -1.0, -1.0
 
 ; Translation by ( 0 | 0 | -5 )
 ; FOV: 30°; Aspect: 320/200; zNear: 1; zFar: 100
-modelview_projection_matrix:
-dd 2.33253, 0.0    ,  0.0    ,  0.0
-dd 0.0    , 3.73205,  0.0    ,  0.0
-dd 0.0    , 0.0    , -1.0202 , -1.0
-dd 0.0    , 0.0    ,  3.08081,  5.0
+modelview_projection_matrix = 0x7bc0
+mpm_data:
+dd 2.33253, 3.73205, -1.0202, 5.0, 3.08081
 
-; First and second single are half of width and height, respectively. Third is
-; free to use (assumed to be 7.0), fourth... Well, idc.
+; half of width and height, respectively
 disp_transformation:
-dd 160.0, 100.0, 7.0
+dd 160.0, 100.0
 
 
 ; Rotation matrix (3x3, 1° around ( 0.3 | 1 | 0.1 ))
@@ -71,11 +68,36 @@ dd  0.99986   ,  0.00170556, -0.0166361
 dd -0.00162249,  0.999986  ,  0.00500591
 dd  0.0166444 , -0.00497822,  0.999849
 
+; must be aligned at 16 byte boundary
+seven:
+dd 7.0
+
 
 _start:
 
-xor     ax,ax
-mov     ds,ax
+xor     cx,cx
+mov     ds,cx
+mov     es,cx
+
+
+; "decompress" the modelview-projection matrix
+mov     di,modelview_projection_matrix
+mov     bx,di
+mov     si,mpm_data
+
+mov     al,4
+init_mpm:
+movsd
+mov     cl,8
+; This will overwrite the beginning of this file, but who cares - the code's
+; been executed already.
+rep     stosw
+dec     al
+jnz     init_mpm
+
+; copy the one non-diagonal value
+sub     di,24
+movsd
 
 
 ; Creates a nearly BRG 2:3:3 (MSb to LSb) 8 bit palette (not exactly, but close enough).
@@ -97,7 +119,6 @@ jnz     palette_loop
 
 main_loop:
 
-mov     bx,modelview_projection_matrix
 mov     bp,mult
 
 mov     di,0x8000
@@ -112,7 +133,7 @@ xorps   xmm0,xmm0
 xor     si,si
 
 mult_inner_loop:
-movaps  xmm1,[bx + si]
+movaps  xmm1,[bx+si]
 ; One byte shorter than movss, but achieves the same thing in the end (loading dword [bp] to xmm2)
 movups  xmm2,[ds:bp]
 add     bp,4
@@ -142,17 +163,17 @@ rep     movsw
 
 
 
-mov     si,-16
+mov     si,0x60
 mat_norm_loop:
-movups  xmm0,[bx + si]
-shufps  xmm0,[bx - 16],0x44
+movups  xmm0,[bx+si]
+shufps  xmm0,[bx+0x60],0x44
 
 mov     di,48           ; i = 3
 xorps   xmm3,xmm3
 matrix_dot_vector_loop:
 pshufd  xmm4,xmm0,0xFF  ; vector[i]
 pslldq  xmm0,4          ; shift that out
-mulps   xmm4,[bx + di]  ; matrix[i]
+mulps   xmm4,[bx+di]  ; matrix[i]
 addps   xmm3,xmm4
 sub     di,16           ; i--
 jnc     matrix_dot_vector_loop
@@ -165,9 +186,10 @@ movaps  xmm0,xmm1
 movaps  xmm1,xmm2
 movaps  xmm2,xmm3
 add     si,4
-; First round: 0xfff4 (odd); second: 0xfff8 (odd); third (final): 0xfffc (even)
+; First round: 0x0064 (odd); second: 0x0068 (odd); third (final): 0x006c (even)
 jnp     mat_norm_loop
 
+; Store all XMM registers in memory, especially xmm0, xmm1 and xmm2 (the three vertices)
 pop     si
 fxsave  [si]
 
@@ -212,7 +234,7 @@ punpckldq xmm0,xmm1
 
 push    ax
 
-movaps  xmm1,[disp_transformation]
+movups  xmm1,[disp_transformation]
 subps   xmm0,xmm1
 divps   xmm0,xmm1
 
@@ -258,7 +280,7 @@ jb      cull
 comiss  xmm1,xmm2
 jb      cull
 ; W coordinate of all vertices (should be 1...)
-movups  xmm2,[bx - 12]
+movups  xmm2,[bx+0x64]
 comiss  xmm3,xmm2
 ja      cull
 
@@ -267,16 +289,21 @@ ja      cull
 ; s is that of second, t that of third
 subps   xmm2,xmm3
 
-mulps   xmm0,[si+0xb8]
-mulps   xmm1,[si+0xc8]
-mulps   xmm2,[si+0xa8]
+; Now, xmm0, xmm1 and xmm2 contain the weight of the second, third and first
+; vertex color, respectively. Multiply them by their respective vertex's depth
+; for perspective correction (the memory address refers to the fxsave location).
+; Those addresses aren't aligned, therefore we can't use mulps.
+mulss   xmm0,[si+0xb8]
+mulss   xmm1,[si+0xc8]
+mulss   xmm2,[si+0xa8]
 
+; summarize all weights for normalization
 movaps  xmm3,xmm0
 addps   xmm3,xmm1
 addps   xmm3,xmm2
 
-; multiply each weight by 7
-divps   xmm3,[bx + 72]
+; multiply each weight by 7 (divide the normalization divisor by 7)
+divps   xmm3,[bx+seven-modelview_projection_matrix]
 divps   xmm2,xmm3
 cvtss2si eax,xmm2
 ; first vertex is blue, must be shifted right by 1, because the blue share of
@@ -314,6 +341,6 @@ jmp     rasterize
 
 
 
-;times 510-($-$$) db 0
+times 510-($-$$) db 0
 
 dw 0xAA55
